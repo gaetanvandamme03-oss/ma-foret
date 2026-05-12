@@ -1,0 +1,19 @@
+{
+  "name": "ma-foret-server",
+  "version": "1.0.0",
+  "description": "Backend server for Ma Forêt shop with inventory management",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "apiculture",
+    "miel",
+    "inventory"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {}
+}

@@ -1,0 +1,34 @@
+{
+  "stocks": [
+    {
+      "id": "miel-printemps",
+      "name": "Miel de printemps",
+      "stock": 9
+    },
+    {
+      "id": "miel-ete",
+      "name": "Miel d'été",
+      "stock": 99
+    },
+    {
+      "id": "miel-automne",
+      "name": "Miel d'automne",
+      "stock": 100
+    },
+    {
+      "id": "miel-foret",
+      "name": "Miel de forêt",
+      "stock": 99
+    },
+    {
+      "id": "miel-lavande",
+      "name": "Miel de lavande",
+      "stock": 25
+    },
+    {
+      "id": "miel-acacia",
+      "name": "Miel d'acacia",
+      "stock": 35
+    }
+  ]
+}
