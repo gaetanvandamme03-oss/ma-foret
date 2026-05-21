@@ -121,6 +121,8 @@ function parseBody(req, callback) {
 
 const ORDERS_FILE = path.join(__dirname, 'orders.json');
 const PENDING_PAYPAL_FILE = path.join(__dirname, 'pending-paypal-orders.json');
+const SHIPPING_THRESHOLD = 50;
+const SHIPPING_FEE = 5;
 
 /** Prix unitaires (€) — doivent correspondre aux boutons du site */
 const CATALOG_PRICES = {
@@ -196,6 +198,10 @@ function validateCartLines(cartLines) {
     });
   }
   return { total: Number(total.toFixed(2)), lines };
+}
+
+function getShippingFee(subtotal) {
+  return subtotal > 0 && subtotal < SHIPPING_THRESHOLD ? SHIPPING_FEE : 0;
 }
 
 function readPendingPaypalOrders() {
@@ -448,7 +454,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const { total, lines } = validated;
+      const { total: subtotal, lines } = validated;
+      const shipping = getShippingFee(subtotal);
+      const total = Number((subtotal + shipping).toFixed(2));
 
       try {
         const token = await getPaypalAccessToken();
@@ -481,6 +489,8 @@ const server = http.createServer(async (req, res) => {
         const pending = readPendingPaypalOrders();
         pending[data.id] = {
           cart: lines,
+          subtotal,
+          shipping,
           total,
           customer: body.customer || {},
           createdAt: new Date().toISOString(),
@@ -488,7 +498,7 @@ const server = http.createServer(async (req, res) => {
         writePendingPaypalOrders(pending);
 
         setHeaders(res, 200);
-        res.end(JSON.stringify({ orderID: data.id, total }));
+        res.end(JSON.stringify({ orderID: data.id, subtotal, shipping, total }));
       } catch (error) {
         console.error('PayPal create-order error:', error);
         setHeaders(res, 500);
@@ -539,6 +549,8 @@ const server = http.createServer(async (req, res) => {
           paypalOrderId: orderId,
           captureId: data.id,
           status: data.status,
+          subtotal: snapshot.subtotal,
+          shipping: snapshot.shipping,
           total: snapshot.total,
           cart: snapshot.cart,
           customer: snapshot.customer || body.customer || {},
@@ -549,6 +561,8 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({
           status: 'COMPLETED',
           orderID: orderId,
+          subtotal: snapshot.subtotal,
+          shipping: snapshot.shipping,
           total: snapshot.total,
           cart: snapshot.cart,
           customer: snapshot.customer,
