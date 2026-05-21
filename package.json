@@ -1,7 +1,7 @@
 {
   "name": "ma-foret-server",
   "version": "1.0.0",
-  "description": "Backend server for Ma Forêt shop with inventory management",
+  "description": "Backend server for Ma Forêt shop with inventory management and PayPal",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -11,9 +11,12 @@
   "keywords": [
     "apiculture",
     "miel",
-    "inventory"
+    "inventory",
+    "paypal"
   ],
   "author": "",
   "license": "ISC",
-  "dependencies": {}
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
 }

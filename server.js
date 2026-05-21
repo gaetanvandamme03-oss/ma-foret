@@ -1,8 +1,20 @@
+
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { URL } from 'url';
+
+// Chargement sécurisé des variables d'environnement (PayPal, etc.)
+try {
+  const dotenvPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '.env');
+  if (fs.existsSync(dotenvPath)) {
+    const dotenv = await import('dotenv');
+    dotenv.config({ path: dotenvPath });
+  }
+} catch (e) {
+  console.warn('dotenv non chargé (optionnel en prod):', e.message);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -107,7 +119,136 @@ function parseBody(req, callback) {
   });
 }
 
-const server = http.createServer((req, res) => {
+const ORDERS_FILE = path.join(__dirname, 'orders.json');
+const PENDING_PAYPAL_FILE = path.join(__dirname, 'pending-paypal-orders.json');
+
+/** Prix unitaires (€) — doivent correspondre aux boutons du site */
+const CATALOG_PRICES = {
+  'miel-debut-250': 6,
+  'miel-debut-500': 11,
+  'tradition-250': 6,
+  'tradition-500': 11,
+  'vanille-orange-250': 7,
+  'cerise-griotte-250': 7,
+  'noisette-chocolat-250': 7,
+  'propolis-250': 8,
+  'miel-ete-250': 6,
+  'miel-ete-500': 11,
+  'miel-foret-250': 6,
+  'miel-foret-500': 11,
+};
+
+function resolveStockId(product, size) {
+  const direct = {
+    'Miel début saison 250g': 'miel-debut-250',
+    'Miel début saison 500g': 'miel-debut-500',
+    'Tradition 250g': 'tradition-250',
+    'Tradition 500g': 'tradition-500',
+    'Vanille orange 250g': 'vanille-orange-250',
+    'Cerise griotte 250g': 'cerise-griotte-250',
+    'Noisette chocolat 250g': 'noisette-chocolat-250',
+    "À l'extrait de propolis 250g": 'propolis-250',
+  };
+  if (direct[product]) return direct[product];
+  if (size) {
+    const composite = `${product}|${size}`;
+    const bySize = {
+      "Miel d'été|250g": 'miel-ete-250',
+      "Miel d'été|500g": 'miel-ete-500',
+      "Miel de forêt|250g": 'miel-foret-250',
+      "Miel de forêt|500g": 'miel-foret-500',
+    };
+    if (bySize[composite]) return bySize[composite];
+  }
+  return null;
+}
+
+function validateCartLines(cartLines) {
+  if (!Array.isArray(cartLines) || cartLines.length === 0) {
+    return { error: 'Panier vide' };
+  }
+  let total = 0;
+  const lines = [];
+  for (const line of cartLines) {
+    const stockId = resolveStockId(line.product, line.size);
+    if (!stockId) {
+      return { error: `Produit non reconnu : ${line.product} ${line.size || ''}`.trim() };
+    }
+    const unitPrice = CATALOG_PRICES[stockId];
+    if (unitPrice === undefined) {
+      return { error: `Prix catalogue manquant pour ${stockId}` };
+    }
+    const quantity = normalizePositiveInt(line.quantity, null);
+    if (quantity === null) {
+      return { error: 'Quantité invalide' };
+    }
+    const clientPrice = Number(line.price);
+    if (!Number.isFinite(clientPrice) || Math.abs(clientPrice - unitPrice) > 0.02) {
+      return { error: `Prix incorrect pour ${line.product}` };
+    }
+    total += unitPrice * quantity;
+    lines.push({
+      stockId,
+      product: line.product,
+      size: line.size || '',
+      quantity,
+      unitPrice,
+    });
+  }
+  return { total: Number(total.toFixed(2)), lines };
+}
+
+function readPendingPaypalOrders() {
+  try {
+    if (!fs.existsSync(PENDING_PAYPAL_FILE)) return {};
+    return JSON.parse(fs.readFileSync(PENDING_PAYPAL_FILE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writePendingPaypalOrders(data) {
+  fs.writeFileSync(PENDING_PAYPAL_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function saveCompletedOrder(record) {
+  let orders = { orders: [] };
+  if (fs.existsSync(ORDERS_FILE)) {
+    orders = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')) || { orders: [] };
+  }
+  orders.orders.unshift(record);
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf8');
+}
+
+function getPaypalBase() {
+  const mode = (process.env.PAYPAL_MODE || 'sandbox').toLowerCase();
+  return mode === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
+}
+
+async function getPaypalAccessToken() {
+  const clientId = process.env.PAYPAL_CLIENT_ID;
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error('PAYPAL_CLIENT_ID or PAYPAL_CLIENT_SECRET not set');
+  }
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const resp = await fetch(`${getPaypalBase()}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  });
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => '');
+    throw new Error(`PayPal token failed: ${resp.status} ${txt}`);
+  }
+  const data = await resp.json();
+  return data.access_token;
+}
+
+const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, `http://${req.headers.host}`);
   const pathname = urlObj.pathname;
 
@@ -284,6 +425,143 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/api/paypal/config' && req.method === 'GET') {
+    const clientId = process.env.PAYPAL_CLIENT_ID || null;
+    const mode = process.env.PAYPAL_MODE || 'sandbox';
+    setHeaders(res, 200);
+    res.end(JSON.stringify({ clientId, mode, ready: Boolean(clientId && process.env.PAYPAL_CLIENT_SECRET) }));
+    return;
+  }
+
+  if (pathname === '/api/paypal/create-order' && req.method === 'POST') {
+    parseBody(req, async (parseErr, body) => {
+      if (parseErr) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
+        return;
+      }
+
+      const validated = validateCartLines(body.cart);
+      if (validated.error) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: validated.error }));
+        return;
+      }
+
+      const { total, lines } = validated;
+
+      try {
+        const token = await getPaypalAccessToken();
+        const purchase = {
+          intent: 'CAPTURE',
+          purchase_units: [
+            {
+              description: 'Commande Ma Forêt',
+              amount: { currency_code: 'EUR', value: total.toFixed(2) },
+            },
+          ],
+        };
+
+        const resp = await fetch(`${getPaypalBase()}/v2/checkout/orders`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(purchase),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+          setHeaders(res, 500);
+          res.end(JSON.stringify({ error: 'Erreur création commande PayPal', details: data }));
+          return;
+        }
+
+        const pending = readPendingPaypalOrders();
+        pending[data.id] = {
+          cart: lines,
+          total,
+          customer: body.customer || {},
+          createdAt: new Date().toISOString(),
+        };
+        writePendingPaypalOrders(pending);
+
+        setHeaders(res, 200);
+        res.end(JSON.stringify({ orderID: data.id, total }));
+      } catch (error) {
+        console.error('PayPal create-order error:', error);
+        setHeaders(res, 500);
+        res.end(JSON.stringify({ error: 'Erreur serveur PayPal', message: error.message }));
+      }
+    });
+    return;
+  }
+
+  if (pathname.match(/^\/api\/paypal\/capture-order\//) && req.method === 'POST') {
+    const orderId = pathname.split('/').pop();
+    if (!orderId || orderId === 'capture-order') {
+      setHeaders(res, 400);
+      res.end(JSON.stringify({ error: 'orderId manquant' }));
+      return;
+    }
+
+    parseBody(req, async (parseErr, body) => {
+      if (parseErr) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
+        return;
+      }
+
+      try {
+        const token = await getPaypalAccessToken();
+        const resp = await fetch(`${getPaypalBase()}/v2/checkout/orders/${orderId}/capture`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+          setHeaders(res, 500);
+          res.end(JSON.stringify({ error: 'Erreur capture PayPal', details: data }));
+          return;
+        }
+
+        const pending = readPendingPaypalOrders();
+        const snapshot = pending[orderId] || { cart: [], customer: body.customer || {} };
+        delete pending[orderId];
+        writePendingPaypalOrders(pending);
+
+        saveCompletedOrder({
+          paypalOrderId: orderId,
+          captureId: data.id,
+          status: data.status,
+          total: snapshot.total,
+          cart: snapshot.cart,
+          customer: snapshot.customer || body.customer || {},
+          capturedAt: new Date().toISOString(),
+        });
+
+        setHeaders(res, 200);
+        res.end(JSON.stringify({
+          status: 'COMPLETED',
+          orderID: orderId,
+          total: snapshot.total,
+          cart: snapshot.cart,
+          customer: snapshot.customer,
+        }));
+      } catch (error) {
+        console.error('PayPal capture error:', error);
+        setHeaders(res, 500);
+        res.end(JSON.stringify({ error: 'Erreur serveur PayPal', message: error.message }));
+      }
+    });
+    return;
+  }
+
   setHeaders(res, 404);
   res.end(JSON.stringify({ error: 'Route non trouvée' }));
 });
@@ -291,7 +569,12 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`🐝 Serveur Ma Forêt sur ${HOST}:${PORT}`);
   console.log('   Fichier stocks :', STOCKS_FILE);
-  console.log('   Routes : /api/health , /api/stocks , /admin');
+  console.log('   Routes : /api/health , /api/stocks , /admin , /api/paypal/*');
+  if (process.env.PAYPAL_CLIENT_ID) {
+    console.log('   PayPal :', process.env.PAYPAL_MODE || 'sandbox');
+  } else {
+    console.warn('   PayPal : PAYPAL_CLIENT_ID non défini');
+  }
   if (CORS_ORIGIN !== '*') {
     console.log('   CORS autorisé pour :', CORS_ORIGIN);
   }

@@ -1,34 +1,64 @@
 {
   "stocks": [
     {
-      "id": "miel-printemps",
-      "name": "Miel de printemps",
-      "stock": 9
+      "id": "miel-debut-250",
+      "name": "Miel début saison 250g",
+      "stock": 20
     },
     {
-      "id": "miel-ete",
-      "name": "Miel d'été",
-      "stock": 99
+      "id": "miel-debut-500",
+      "name": "Miel début saison 500g",
+      "stock": 20
     },
     {
-      "id": "miel-automne",
-      "name": "Miel d'automne",
-      "stock": 100
+      "id": "tradition-250",
+      "name": "Tradition 250g",
+      "stock": 20
     },
     {
-      "id": "miel-foret",
-      "name": "Miel de forêt",
-      "stock": 99
+      "id": "tradition-500",
+      "name": "Tradition 500g",
+      "stock": 20
     },
     {
-      "id": "miel-lavande",
-      "name": "Miel de lavande",
-      "stock": 25
+      "id": "vanille-orange-250",
+      "name": "Vanille orange 250g",
+      "stock": 20
     },
     {
-      "id": "miel-acacia",
-      "name": "Miel d'acacia",
-      "stock": 35
+      "id": "cerise-griotte-250",
+      "name": "Cerise griotte 250g",
+      "stock": 19
+    },
+    {
+      "id": "noisette-chocolat-250",
+      "name": "Noisette chocolat 250g",
+      "stock": 20
+    },
+    {
+      "id": "propolis-250",
+      "name": "À l'extrait de propolis 250g",
+      "stock": 20
+    },
+    {
+      "id": "miel-ete-250",
+      "name": "Miel d'été 250g",
+      "stock": 20
+    },
+    {
+      "id": "miel-ete-500",
+      "name": "Miel d'été 500g",
+      "stock": 20
+    },
+    {
+      "id": "miel-foret-250",
+      "name": "Miel de forêt 250g",
+      "stock": 20
+    },
+    {
+      "id": "miel-foret-500",
+      "name": "Miel de forêt 500g",
+      "stock": 20
     }
   ]
 }
