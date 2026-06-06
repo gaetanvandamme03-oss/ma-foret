@@ -22,6 +22,10 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+const ORDER_EMAIL = process.env.ORDER_EMAIL || 'maforet01@gmail.com';
+const MAIL_FROM_EMAIL = process.env.MAIL_FROM_EMAIL || ORDER_EMAIL;
+const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || 'Ma Forêt';
+const PICKUP_ADDRESS = process.env.PICKUP_ADDRESS || '17 avenue du bois à Ploërmel';
 const STOCKS_FILE = process.env.STOCKS_FILE
   ? path.resolve(process.env.STOCKS_FILE)
   : path.join(__dirname, 'stocks.json');
@@ -202,6 +206,185 @@ function validateCartLines(cartLines) {
 
 function getShippingFee(subtotal) {
   return subtotal > 0 && subtotal < SHIPPING_THRESHOLD ? SHIPPING_FEE : 0;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatEuro(value) {
+  return `${Number(value || 0).toFixed(2).replace('.', ',')} €`;
+}
+
+function validateCustomer(customer) {
+  const data = customer || {};
+  const email = String(data.email || '').trim();
+  if (!String(data.nom || '').trim() || !String(data.prenom || '').trim() || !email) {
+    return { error: 'Nom, prénom et email obligatoires' };
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { error: 'Email invalide' };
+  }
+  return {
+    customer: {
+      nom: String(data.nom || '').trim(),
+      prenom: String(data.prenom || '').trim(),
+      email,
+      message: String(data.message || '').trim(),
+    },
+  };
+}
+
+function orderLinesText(lines) {
+  return lines
+    .map((line) => `- ${line.product} / ${line.size} x${line.quantity} : ${formatEuro(line.unitPrice * line.quantity)}`)
+    .join('\n');
+}
+
+function orderLinesHtml(lines) {
+  return lines
+    .map(
+      (line) =>
+        `<li>${escapeHtml(line.product)} / ${escapeHtml(line.size)} x${line.quantity} : <strong>${formatEuro(
+          line.unitPrice * line.quantity
+        )}</strong></li>`
+    )
+    .join('');
+}
+
+async function sendBrevoEmail({ to, subject, textContent, htmlContent, replyTo }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY non défini');
+  }
+
+  const payload = {
+    sender: { email: MAIL_FROM_EMAIL, name: MAIL_FROM_NAME },
+    to: Array.isArray(to) ? to : [to],
+    subject,
+    textContent,
+    htmlContent,
+  };
+  if (replyTo) payload.replyTo = replyTo;
+
+  const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(`Brevo email failed: ${resp.status} ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+async function sendOrderConfirmationEmails({ lines, total, customer, subjectPrefix, paymentLabel, includePickupAddress = false }) {
+  const safeCustomer = customer || {};
+  const name = `${safeCustomer.prenom || ''} ${safeCustomer.nom || ''}`.trim() || 'Client Ma Forêt';
+  const email = String(safeCustomer.email || '').trim();
+  const textLines = orderLinesText(lines || []);
+  const htmlLines = orderLinesHtml(lines || []);
+  const messageText = safeCustomer.message || 'Aucun message particulier.';
+  const addressText = includePickupAddress
+    ? PICKUP_ADDRESS
+    : [safeCustomer.adresse, `${safeCustomer.codepostal || ''} ${safeCustomer.ville || ''}`.trim()]
+        .filter(Boolean)
+        .join('\n');
+
+  const sellerText = [
+    subjectPrefix,
+    '',
+    'Commande :',
+    textLines,
+    '',
+    `Total : ${formatEuro(total)}`,
+    `Paiement : ${paymentLabel}`,
+    includePickupAddress ? `Adresse de retrait donnée au client : ${PICKUP_ADDRESS}` : `Adresse de livraison :\n${addressText}`,
+    '',
+    'Client :',
+    name,
+    email,
+    '',
+    'Message :',
+    messageText,
+  ].join('\n');
+
+  const customerText = [
+    `Bonjour ${safeCustomer.prenom || safeCustomer.nom || ''},`,
+    '',
+    'Merci pour votre commande Ma Forêt.',
+    '',
+    'Votre commande :',
+    textLines,
+    '',
+    `Total : ${formatEuro(total)}`,
+    `Paiement : ${paymentLabel}`,
+    includePickupAddress ? `Adresse de retrait :\n${PICKUP_ADDRESS}` : `Adresse de livraison :\n${addressText}`,
+    '',
+    includePickupAddress ? 'Vous serez recontacté si besoin pour convenir du moment de retrait.' : 'Votre commande a bien été réglée en ligne.',
+    '',
+    'Merci et à bientôt,',
+    'Ma Forêt',
+  ].join('\n');
+
+  const sellerHtml = `
+    <h2>${escapeHtml(subjectPrefix)}</h2>
+    <h3>Commande</h3>
+    <ul>${htmlLines}</ul>
+    <p><strong>Total :</strong> ${formatEuro(total)}</p>
+    <p><strong>Paiement :</strong> ${escapeHtml(paymentLabel)}</p>
+    <p><strong>${includePickupAddress ? 'Adresse de retrait donnée au client' : 'Adresse de livraison'} :</strong><br>${escapeHtml(
+      addressText
+    ).replace(/\n/g, '<br>')}</p>
+    <h3>Client</h3>
+    <p>${escapeHtml(name)}<br>${escapeHtml(email)}</p>
+    <h3>Message</h3>
+    <p>${escapeHtml(messageText).replace(/\n/g, '<br>')}</p>
+  `;
+
+  const customerHtml = `
+    <p>Bonjour ${escapeHtml(safeCustomer.prenom || safeCustomer.nom || '')},</p>
+    <p>Merci pour votre commande Ma Forêt.</p>
+    <h3>Votre commande</h3>
+    <ul>${htmlLines}</ul>
+    <p><strong>Total :</strong> ${formatEuro(total)}</p>
+    <p><strong>Paiement :</strong> ${escapeHtml(paymentLabel)}</p>
+    <p><strong>${includePickupAddress ? 'Adresse de retrait' : 'Adresse de livraison'} :</strong><br>${escapeHtml(addressText).replace(
+      /\n/g,
+      '<br>'
+    )}</p>
+    <p>${includePickupAddress ? 'Vous serez recontacté si besoin pour convenir du moment de retrait.' : 'Votre commande a bien été réglée en ligne.'}</p>
+    <p>Merci et à bientôt,<br>Ma Forêt</p>
+  `;
+
+  await sendBrevoEmail({
+    to: [{ email: ORDER_EMAIL, name: MAIL_FROM_NAME }],
+    subject: subjectPrefix,
+    textContent: sellerText,
+    htmlContent: sellerHtml,
+    replyTo: email ? { email, name } : undefined,
+  });
+
+  if (email) {
+    await sendBrevoEmail({
+      to: [{ email, name }],
+      subject: includePickupAddress ? 'Votre commande Ma Forêt - retrait à Ploërmel' : 'Votre commande Ma Forêt',
+      textContent: customerText,
+      htmlContent: customerHtml,
+      replyTo: { email: ORDER_EMAIL, name: MAIL_FROM_NAME },
+    });
+  }
 }
 
 function readPendingPaypalOrders() {
@@ -439,6 +622,61 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/orders/pickup' && req.method === 'POST') {
+    parseBody(req, async (parseErr, body) => {
+      if (parseErr) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
+        return;
+      }
+
+      const validated = validateCartLines(body.cart);
+      if (validated.error) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: validated.error }));
+        return;
+      }
+
+      const customerResult = validateCustomer(body.customer);
+      if (customerResult.error) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: customerResult.error }));
+        return;
+      }
+
+      const { total, lines } = validated;
+      const { customer } = customerResult;
+      try {
+        await sendOrderConfirmationEmails({
+          lines,
+          total,
+          customer,
+          subjectPrefix: 'Nouvelle commande Ma Forêt - retrait à Ploërmel',
+          paymentLabel: 'Espèces lors du retrait',
+          includePickupAddress: true,
+        });
+
+        saveCompletedOrder({
+          type: 'pickup',
+          status: 'PENDING_PICKUP',
+          total,
+          cart: lines,
+          customer,
+          pickupAddress: PICKUP_ADDRESS,
+          createdAt: new Date().toISOString(),
+        });
+
+        setHeaders(res, 200);
+        res.end(JSON.stringify({ ok: true, total, pickupAddress: PICKUP_ADDRESS }));
+      } catch (error) {
+        console.error('Pickup order email error:', error);
+        setHeaders(res, 500);
+        res.end(JSON.stringify({ error: 'Erreur envoi email commande', message: error.message }));
+      }
+    });
+    return;
+  }
+
   if (pathname === '/api/paypal/create-order' && req.method === 'POST') {
     parseBody(req, async (parseErr, body) => {
       if (parseErr) {
@@ -545,7 +783,7 @@ const server = http.createServer(async (req, res) => {
         delete pending[orderId];
         writePendingPaypalOrders(pending);
 
-        saveCompletedOrder({
+        const completedOrder = {
           paypalOrderId: orderId,
           captureId: data.id,
           status: data.status,
@@ -555,7 +793,21 @@ const server = http.createServer(async (req, res) => {
           cart: snapshot.cart,
           customer: snapshot.customer || body.customer || {},
           capturedAt: new Date().toISOString(),
-        });
+        };
+        saveCompletedOrder(completedOrder);
+
+        if (process.env.BREVO_API_KEY) {
+          sendOrderConfirmationEmails({
+            lines: completedOrder.cart,
+            total: completedOrder.total,
+            customer: completedOrder.customer,
+            subjectPrefix: 'Nouvelle commande Ma Forêt - PayPal',
+            paymentLabel: 'PayPal / carte bancaire (payé en ligne)',
+            includePickupAddress: false,
+          }).catch((emailError) => {
+            console.error('PayPal confirmation email error:', emailError);
+          });
+        }
 
         setHeaders(res, 200);
         res.end(JSON.stringify({
