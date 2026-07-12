@@ -650,6 +650,50 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/contact' && req.method === 'POST') {
+    parseBody(req, async (parseErr, body) => {
+      if (parseErr) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
+        return;
+      }
+
+      const nom = String((body && body.nom) || '').trim();
+      const prenom = String((body && body.prenom) || '').trim();
+      const email = String((body && body.email) || '').trim();
+      const message = String((body && body.message) || '').trim();
+
+      if (!nom || !prenom || !email || !message) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Nom, prénom, email et message sont obligatoires' }));
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Email invalide' }));
+        return;
+      }
+
+      try {
+        await sendBrevoEmail({
+          to: [{ email: ORDER_EMAIL, name: MAIL_FROM_NAME }],
+          subject: `Nouvelle demande via le site - ${prenom} ${nom}`,
+          textContent: `Nouvelle demande depuis le formulaire de contact.\n\nNom : ${nom}\nPrénom : ${prenom}\nEmail : ${email}\n\nMessage :\n${message}`,
+          htmlContent: `<h2>Nouvelle demande via le site</h2><p><strong>Nom :</strong> ${escapeHtml(nom)}<br><strong>Prénom :</strong> ${escapeHtml(prenom)}<br><strong>Email :</strong> ${escapeHtml(email)}</p><h3>Message</h3><p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>`,
+          replyTo: { email, name: `${prenom} ${nom}`.trim() },
+        });
+
+        setHeaders(res, 200);
+        res.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        console.error('Contact email error:', error);
+        setHeaders(res, 500);
+        res.end(JSON.stringify({ error: 'Erreur envoi message', message: error.message }));
+      }
+    });
+    return;
+  }
+
   if (pathname === '/api/newsletter' && req.method === 'POST') {
     parseBody(req, async (parseErr, body) => {
       if (parseErr) {
