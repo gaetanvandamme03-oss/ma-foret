@@ -1,4 +1,3 @@
-
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -619,6 +618,41 @@ const server = http.createServer(async (req, res) => {
     const mode = process.env.PAYPAL_MODE || 'sandbox';
     setHeaders(res, 200);
     res.end(JSON.stringify({ clientId, mode, ready: Boolean(clientId && process.env.PAYPAL_CLIENT_SECRET) }));
+    return;
+  }
+
+  if (pathname === '/api/newsletter' && req.method === 'POST') {
+    parseBody(req, async (parseErr, body) => {
+      if (parseErr) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
+        return;
+      }
+
+      const email = String((body && body.email) || '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Email invalide' }));
+        return;
+      }
+
+      try {
+        await sendBrevoEmail({
+          to: [{ email: ORDER_EMAIL, name: MAIL_FROM_NAME }],
+          subject: 'Nouvelle inscription newsletter Ma Forêt',
+          textContent: `Nouvelle inscription à la newsletter : ${email}`,
+          htmlContent: `<p>Nouvelle inscription à la newsletter : <strong>${escapeHtml(email)}</strong></p>`,
+          replyTo: { email, name: email },
+        });
+
+        setHeaders(res, 200);
+        res.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        console.error('Newsletter email error:', error);
+        setHeaders(res, 500);
+        res.end(JSON.stringify({ error: 'Erreur envoi newsletter', message: error.message }));
+      }
+    });
     return;
   }
 
