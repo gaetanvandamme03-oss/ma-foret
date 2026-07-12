@@ -83,6 +83,33 @@ function writeStocks(data) {
   }
 }
 
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+function isAdminAuthorized(req) {
+  if (!ADMIN_PASSWORD) return false;
+  const header = req.headers['authorization'] || '';
+  const match = header.match(/^Basic (.+)$/);
+  if (!match) return false;
+  const decoded = Buffer.from(match[1], 'base64').toString('utf8');
+  const separatorIndex = decoded.indexOf(':');
+  if (separatorIndex === -1) return false;
+  const user = decoded.slice(0, separatorIndex);
+  const pass = decoded.slice(separatorIndex + 1);
+  return user === ADMIN_USER && pass === ADMIN_PASSWORD;
+}
+
+function requireAdminAuth(req, res) {
+  if (isAdminAuthorized(req)) return true;
+  res.writeHead(401, {
+    'WWW-Authenticate': 'Basic realm="Ma Foret Admin"',
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Access-Control-Allow-Origin': CORS_ORIGIN,
+  });
+  res.end('Authentification requise');
+  return false;
+}
+
 function setHeaders(res, statusCode = 200, contentType = 'application/json') {
   res.writeHead(statusCode, {
     'Content-Type': contentType,
@@ -447,6 +474,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if ((pathname === '/admin' || pathname === '/admin.html') && req.method === 'GET') {
+    if (!requireAdminAuth(req, res)) return;
     serveAdminPage(res);
     return;
   }
@@ -565,6 +593,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.match(/^\/api\/stocks\/[^\/]+\/update$/) && req.method === 'POST') {
+    if (!requireAdminAuth(req, res)) return;
     const id = pathname.split('/')[3];
     parseBody(req, (parseErr, body) => {
       if (parseErr) {
@@ -874,6 +903,9 @@ server.listen(PORT, HOST, () => {
     console.log('   PayPal :', process.env.PAYPAL_MODE || 'sandbox');
   } else {
     console.warn('   PayPal : PAYPAL_CLIENT_ID non défini');
+  }
+  if (!ADMIN_PASSWORD) {
+    console.warn('   Admin : ADMIN_PASSWORD non défini — /admin est inaccessible tant que ce n\'est pas configuré');
   }
   if (CORS_ORIGIN !== '*') {
     console.log('   CORS autorisé pour :', CORS_ORIGIN);
