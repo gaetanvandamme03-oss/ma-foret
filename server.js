@@ -2,6 +2,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { URL } from 'url';
 
@@ -427,9 +428,50 @@ function writePendingPaypalOrders(data) {
   fs.writeFileSync(PENDING_PAYPAL_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
+function base64url(input) {
+  return Buffer.from(input)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+async function getGoogleSheetsAccessToken() {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const privateKey = (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  if (!email || !privateKey) {
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_EMAIL ou GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY non défini');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const claims = {
+    iss: email,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now,
+  };
+
+  const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(claims))}`;
+  const signature = crypto.createSign('RSA-SHA256').update(signingInput).sign(privateKey);
+  const signedJwt = `${signingInput}.${base64url(signature)}`;
+
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${signedJwt}`,
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(`Google auth failed: ${resp.status} ${JSON.stringify(data)}`);
+  }
+  return data.access_token;
+}
+
 async function sendOrderToSheet({ type, lines, total, customer, paymentLabel }) {
-  const webhookUrl = process.env.SHEET_WEBHOOK_URL;
-  if (!webhookUrl) return;
+  const sheetId = process.env.GOOGLE_SHEET_ID;
+  if (!sheetId) return;
 
   const productsText = (lines || [])
     .map((line) => `${line.product} ${line.size || ''} x${line.quantity}`.trim())
@@ -437,19 +479,32 @@ async function sendOrderToSheet({ type, lines, total, customer, paymentLabel }) 
   const name = `${(customer && customer.prenom) || ''} ${(customer && customer.nom) || ''}`.trim();
 
   try {
-    await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type,
-        customer: name,
-        email: (customer && customer.email) || '',
-        products: productsText,
-        total: formatEuro(total),
-        payment: paymentLabel,
-      }),
-      redirect: 'follow',
-    });
+    const token = await getGoogleSheetsAccessToken();
+    const row = [
+      new Date().toISOString(),
+      type,
+      name,
+      (customer && customer.email) || '',
+      productsText,
+      formatEuro(total),
+      paymentLabel,
+    ];
+
+    const resp = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values: [row] }),
+      }
+    );
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      console.error('Erreur ajout ligne Google Sheet:', resp.status, errBody);
+    }
   } catch (error) {
     console.error('Erreur envoi Google Sheet:', error.message);
   }
