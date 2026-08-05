@@ -221,6 +221,35 @@
       margin-bottom: 5px;
     }
 
+    .section-title {
+      margin: 30px 0 6px;
+      color: #333;
+      font-size: 1.3rem;
+    }
+
+    .section-subtitle {
+      color: #777;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+    }
+
+    .stock-card.inactive {
+      background: #f0f0f0;
+      opacity: 0.85;
+    }
+
+    .badge-inactive {
+      display: inline-block;
+      margin-bottom: 8px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #e0e0e0;
+      color: #666;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
     @media (max-width: 600px) {
       header h1 {
         font-size: 1.8rem;
@@ -268,7 +297,15 @@
         </div>
       </div>
 
-      <div class="stocks-grid" id="stocksGrid">
+      <h2 class="section-title">Produits actuellement sur le site</h2>
+      <p class="section-subtitle">Ceux que les clients peuvent commander maintenant.</p>
+      <div class="stocks-grid" id="stocksGridActive">
+        <!-- Cartes de stocks injectées ici -->
+      </div>
+
+      <h2 class="section-title">Autres produits</h2>
+      <p class="section-subtitle">Anciens produits, plus proposés à la vente sur le site, mais dont le stock est conservé.</p>
+      <div class="stocks-grid" id="stocksGridOther">
         <!-- Cartes de stocks injectées ici -->
       </div>
     </div>
@@ -313,12 +350,17 @@
       statusEl.className = `status ${type}`;
     }
 
+    function isActive(stock) {
+      return stock.active !== false;
+    }
+
     function updateStats() {
-      const total = stocks.reduce((sum, s) => sum + s.stock, 0);
-      const avg = stocks.length > 0 ? Math.round(total / stocks.length) : 0;
-      
+      const activeStocks = stocks.filter(isActive);
+      const total = activeStocks.reduce((sum, s) => sum + s.stock, 0);
+      const avg = activeStocks.length > 0 ? Math.round(total / activeStocks.length) : 0;
+
       document.getElementById("totalStock").textContent = total;
-      document.getElementById("totalProducts").textContent = stocks.length;
+      document.getElementById("totalProducts").textContent = activeStocks.length;
       document.getElementById("avgStock").textContent = avg;
     }
 
@@ -329,10 +371,10 @@
       return "";
     }
 
-    function renderStocks() {
-      const grid = document.getElementById("stocksGrid");
-      grid.innerHTML = stocks.map(stock => `
-        <div class="stock-card">
+    function stockCardHtml(stock) {
+      return `
+        <div class="stock-card ${isActive(stock) ? "" : "inactive"}">
+          ${isActive(stock) ? "" : '<span class="badge-inactive">Non vendu actuellement</span>'}
           <h3>${stock.name}</h3>
           <div class="stock-display ${getStockClass(stock.stock)}">
             ${stock.stock}
@@ -349,7 +391,22 @@
             <button onclick="setStock('${stock.id}')">Définir</button>
           </div>
         </div>
-      `).join("");
+      `;
+    }
+
+    function renderStocks() {
+      const activeGrid = document.getElementById("stocksGridActive");
+      const otherGrid = document.getElementById("stocksGridOther");
+      const activeStocks = stocks.filter(isActive);
+      const otherStocks = stocks.filter((s) => !isActive(s));
+
+      activeGrid.innerHTML = activeStocks.length
+        ? activeStocks.map(stockCardHtml).join("")
+        : '<p style="color:#999;">Aucun produit actif.</p>';
+
+      otherGrid.innerHTML = otherStocks.length
+        ? otherStocks.map(stockCardHtml).join("")
+        : '<p style="color:#999;">Aucun autre produit pour l\'instant.</p>';
     }
 
     async function adjustStock(id, delta) {
