@@ -1,4 +1,3 @@
-
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -35,13 +34,52 @@ const STOCKS_SEED = path.join(__dirname, 'stocks.json');
 
 function ensureStocksFile() {
   try {
-    if (fs.existsSync(STOCKS_FILE)) return;
-    const dir = path.dirname(STOCKS_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    if (fs.existsSync(STOCKS_SEED) && path.resolve(STOCKS_SEED) !== path.resolve(STOCKS_FILE)) {
-      fs.copyFileSync(STOCKS_SEED, STOCKS_FILE);
-    } else {
-      fs.writeFileSync(STOCKS_FILE, JSON.stringify({ stocks: [] }, null, 2), 'utf8');
+    const seed = fs.existsSync(STOCKS_SEED)
+      ? JSON.parse(fs.readFileSync(STOCKS_SEED, 'utf8'))
+      : { stocks: [] };
+
+    if (!fs.existsSync(STOCKS_FILE)) {
+      const dir = path.dirname(STOCKS_FILE);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(STOCKS_FILE, JSON.stringify(seed, null, 2), 'utf8');
+      return;
+    }
+
+    // Le fichier existe déjà (ex: après un précédent déploiement) : on ajoute les
+    // nouveaux produits du catalogue et on marque "inactifs" ceux qui ne sont plus
+    // vendus, sans jamais toucher au stock restant d'un produit existant.
+    const current = JSON.parse(fs.readFileSync(STOCKS_FILE, 'utf8'));
+    current.stocks = Array.isArray(current.stocks) ? current.stocks : [];
+    const currentById = new Map(current.stocks.map((p) => [p.id, p]));
+    const seedIds = new Set((seed.stocks || []).map((p) => p.id));
+    let changed = false;
+
+    for (const seedProduct of seed.stocks || []) {
+      const existing = currentById.get(seedProduct.id);
+      if (!existing) {
+        current.stocks.push(seedProduct);
+        changed = true;
+      } else {
+        if (existing.name !== seedProduct.name) {
+          existing.name = seedProduct.name;
+          changed = true;
+        }
+        if (existing.active !== true) {
+          existing.active = true;
+          changed = true;
+        }
+      }
+    }
+
+    for (const product of current.stocks) {
+      if (!seedIds.has(product.id) && product.active !== false) {
+        product.active = false;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      fs.writeFileSync(STOCKS_FILE, JSON.stringify(current, null, 2), 'utf8');
     }
   } catch (error) {
     console.error('Impossible de préparer le fichier stocks:', error);
