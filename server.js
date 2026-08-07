@@ -26,6 +26,7 @@ const ORDER_EMAIL = process.env.ORDER_EMAIL || 'maforet01@gmail.com';
 const MAIL_FROM_EMAIL = process.env.MAIL_FROM_EMAIL || ORDER_EMAIL;
 const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || 'Ma Forêt';
 const PICKUP_ADDRESS = process.env.PICKUP_ADDRESS || '17 avenue du bois à Ploërmel';
+const SITE_URL = process.env.SITE_URL || 'https://mielmaforet.fr/';
 const STOCKS_FILE = process.env.STOCKS_FILE
   ? path.resolve(process.env.STOCKS_FILE)
   : path.join(__dirname, 'stocks.json');
@@ -831,6 +832,40 @@ const server = http.createServer(async (req, res) => {
         console.error('Newsletter email error:', error);
         setHeaders(res, 500);
         res.end(JSON.stringify({ error: 'Erreur envoi newsletter', message: error.message }));
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/refer' && req.method === 'POST') {
+    parseBody(req, async (parseErr, body) => {
+      if (parseErr) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
+        return;
+      }
+
+      const email = String((body && body.email) || '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setHeaders(res, 400);
+        res.end(JSON.stringify({ error: 'Email invalide' }));
+        return;
+      }
+
+      try {
+        await sendBrevoEmail({
+          to: [{ email, name: email }],
+          subject: 'On vous fait découvrir Ma Forêt 🐝',
+          textContent: `Bonjour,\n\nUn proche vous fait découvrir Ma Forêt, une petite exploitation apicole à Ploërmel : miel, cire, propolis et services autour des abeilles.\n\nDécouvrez le site : ${SITE_URL}\n\nÀ bientôt,\nMa Forêt`,
+          htmlContent: `<p>Bonjour,</p><p>Un proche vous fait découvrir <strong>Ma Forêt</strong>, une petite exploitation apicole à Ploërmel : miel, cire, propolis et services autour des abeilles.</p><p><a href="${SITE_URL}">Découvrir le site Ma Forêt</a></p><p>À bientôt,<br>Ma Forêt</p>`,
+        });
+
+        setHeaders(res, 200);
+        res.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        console.error('Referral email error:', error);
+        setHeaders(res, 500);
+        res.end(JSON.stringify({ error: 'Erreur envoi email', message: error.message }));
       }
     });
     return;
