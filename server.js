@@ -1,3 +1,4 @@
+
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -347,8 +348,21 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
   const textLines = orderLinesText(lines || []);
   const htmlLines = orderLinesHtml(lines || []);
   const messageText = safeCustomer.message || 'Aucun message particulier.';
+  const relayPoint = safeCustomer.relayPoint;
+  const carrierLabel = safeCustomer.carrier === 'colissimo' ? 'Colissimo' : safeCustomer.carrier === 'mondial_relay' ? 'Mondial Relay' : '';
+  const addressLabel = includePickupAddress
+    ? 'Adresse de retrait donnée au client'
+    : relayPoint
+    ? 'Point Relais Mondial Relay'
+    : carrierLabel
+    ? `Livraison à domicile (${carrierLabel})`
+    : 'Adresse de livraison';
   const addressText = includePickupAddress
     ? PICKUP_ADDRESS
+    : relayPoint
+    ? [relayPoint.name, relayPoint.street, `${relayPoint.postalCode || ''} ${relayPoint.city || ''}`.trim()]
+        .filter(Boolean)
+        .join('\n')
     : [safeCustomer.adresse, `${safeCustomer.codepostal || ''} ${safeCustomer.ville || ''}`.trim()]
         .filter(Boolean)
         .join('\n');
@@ -361,7 +375,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     '',
     `Total : ${formatEuro(total)}`,
     `Paiement : ${paymentLabel}`,
-    includePickupAddress ? `Adresse de retrait donnée au client : ${PICKUP_ADDRESS}` : `Adresse de livraison :\n${addressText}`,
+    `${addressLabel} :\n${addressText}`,
     '',
     'Client :',
     name,
@@ -381,7 +395,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     '',
     `Total : ${formatEuro(total)}`,
     `Paiement : ${paymentLabel}`,
-    includePickupAddress ? `Adresse de retrait :\n${PICKUP_ADDRESS}` : `Adresse de livraison :\n${addressText}`,
+    `${addressLabel} :\n${addressText}`,
     '',
     includePickupAddress ? 'Vous serez recontacté si besoin pour convenir du moment de retrait.' : 'Votre commande a bien été réglée en ligne.',
     '',
@@ -395,7 +409,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     <ul>${htmlLines}</ul>
     <p><strong>Total :</strong> ${formatEuro(total)}</p>
     <p><strong>Paiement :</strong> ${escapeHtml(paymentLabel)}</p>
-    <p><strong>${includePickupAddress ? 'Adresse de retrait donnée au client' : 'Adresse de livraison'} :</strong><br>${escapeHtml(
+    <p><strong>${escapeHtml(addressLabel)} :</strong><br>${escapeHtml(
       addressText
     ).replace(/\n/g, '<br>')}</p>
     <h3>Client</h3>
@@ -411,7 +425,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     <ul>${htmlLines}</ul>
     <p><strong>Total :</strong> ${formatEuro(total)}</p>
     <p><strong>Paiement :</strong> ${escapeHtml(paymentLabel)}</p>
-    <p><strong>${includePickupAddress ? 'Adresse de retrait' : 'Adresse de livraison'} :</strong><br>${escapeHtml(addressText).replace(
+    <p><strong>${escapeHtml(includePickupAddress ? 'Adresse de retrait' : addressLabel)} :</strong><br>${escapeHtml(addressText).replace(
       /\n/g,
       '<br>'
     )}</p>
@@ -493,6 +507,20 @@ async function getGoogleSheetsAccessToken() {
   return data.access_token;
 }
 
+function describeDelivery({ type, customer }) {
+  const safeCustomer = customer || {};
+  if (safeCustomer.relayPoint) {
+    const p = safeCustomer.relayPoint;
+    return `Point Relais: ${p.name} - ${p.street || ''}, ${p.postalCode || ''} ${p.city || ''}`.trim();
+  }
+  if (type === 'Retrait Ploërmel') return 'Retrait Ploërmel';
+  if (safeCustomer.adresse) {
+    const carrierLabel = safeCustomer.carrier === 'colissimo' ? 'Colissimo' : safeCustomer.carrier === 'mondial_relay' ? 'Mondial Relay' : '';
+    return `Domicile${carrierLabel ? ` (${carrierLabel})` : ''}: ${safeCustomer.adresse}, ${safeCustomer.codepostal || ''} ${safeCustomer.ville || ''}`.trim();
+  }
+  return '';
+}
+
 async function sendOrderToSheet({ type, lines, total, customer, paymentLabel }) {
   const sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) return;
@@ -512,6 +540,7 @@ async function sendOrderToSheet({ type, lines, total, customer, paymentLabel }) 
       productsText,
       formatEuro(total),
       paymentLabel,
+      describeDelivery({ type, customer }),
     ];
 
     const resp = await fetch(
@@ -569,6 +598,47 @@ async function getPaypalAccessToken() {
   }
   const data = await resp.json();
   return data.access_token;
+}
+
+async function fetchMondialRelayPoints(postcode) {
+  const publicKey = process.env.SENDCLOUD_PUBLIC_KEY;
+  const secretKey = process.env.SENDCLOUD_SECRET_KEY;
+  if (!publicKey || !secretKey) {
+    throw new Error('SENDCLOUD_PUBLIC_KEY ou SENDCLOUD_SECRET_KEY non défini');
+  }
+
+  const auth = Buffer.from(`${publicKey}:${secretKey}`).toString('base64');
+  const params = new URLSearchParams({
+    country_code: 'FR',
+    address_postal_code: postcode,
+    use_integration_carriers: 'true',
+    radius: '15000',
+    limit: '30',
+  });
+
+  const resp = await fetch(`https://panel.sendcloud.sc/api/v3/service-points?${params.toString()}`, {
+    headers: { Authorization: `Basic ${auth}` },
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(`Sendcloud error: ${resp.status} ${JSON.stringify(data)}`);
+  }
+
+  const results = (data.data && data.data.results) || [];
+  return results
+    .filter((point) => {
+      const carrierLabel = `${(point.carrier && point.carrier.code) || ''} ${(point.carrier && point.carrier.name) || ''}`.toLowerCase();
+      return carrierLabel.includes('mondial');
+    })
+    .slice(0, 12)
+    .map((point) => ({
+      id: point.id,
+      name: point.name,
+      street: point.address ? `${point.address.street || ''} ${point.address.house_number || ''}`.trim() : '',
+      postalCode: point.address ? point.address.postal_code : '',
+      city: point.address ? point.address.city : '',
+      distance: point.distance,
+    }));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -755,6 +825,26 @@ const server = http.createServer(async (req, res) => {
     const mode = process.env.PAYPAL_MODE || 'sandbox';
     setHeaders(res, 200);
     res.end(JSON.stringify({ clientId, mode, ready: Boolean(clientId && process.env.PAYPAL_CLIENT_SECRET) }));
+    return;
+  }
+
+  if (pathname === '/api/relay-points' && req.method === 'GET') {
+    const postcode = urlObj.searchParams.get('postcode') || '';
+    if (!/^\d{5}$/.test(postcode)) {
+      setHeaders(res, 400);
+      res.end(JSON.stringify({ error: 'Code postal invalide' }));
+      return;
+    }
+
+    try {
+      const points = await fetchMondialRelayPoints(postcode);
+      setHeaders(res, 200);
+      res.end(JSON.stringify({ points }));
+    } catch (error) {
+      console.error('Erreur recherche points relais:', error);
+      setHeaders(res, 500);
+      res.end(JSON.stringify({ error: 'Erreur recherche points relais', message: error.message }));
+    }
     return;
   }
 
