@@ -13,6 +13,12 @@
       "active": true
     },
     {
+      "id": "tradition-250",
+      "name": "Ronce et Châtaignier Le Tradition 250g",
+      "stock": 20,
+      "active": true
+    },
+    {
       "id": "tradition-500",
       "name": "Ronce et Châtaignier Le Tradition 500g",
       "stock": 20,
@@ -27,6 +33,24 @@
     {
       "id": "propolis-250",
       "name": "Ronce et Châtaignier à l'extrait de Propolis 250g",
+      "stock": 20,
+      "active": true
+    },
+    {
+      "id": "cacahuete-250",
+      "name": "Miel à la Cacahuète 250g",
+      "stock": 20,
+      "active": true
+    },
+    {
+      "id": "pistache-250",
+      "name": "Miel à la Pistache 250g",
+      "stock": 20,
+      "active": true
+    },
+    {
+      "id": "spiruline-250",
+      "name": "Miel à la Spiruline de Bretagne 250g",
       "stock": 20,
       "active": true
     }
