@@ -27,7 +27,6 @@ const ORDER_EMAIL = process.env.ORDER_EMAIL || 'maforet01@gmail.com';
 const MAIL_FROM_EMAIL = process.env.MAIL_FROM_EMAIL || ORDER_EMAIL;
 const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || 'Ma Forêt';
 const PICKUP_ADDRESS = process.env.PICKUP_ADDRESS || '17 avenue du bois à Ploërmel';
-const SITE_URL = process.env.SITE_URL || 'https://mielmaforet.fr/';
 const STOCKS_FILE = process.env.STOCKS_FILE
   ? path.resolve(process.env.STOCKS_FILE)
   : path.join(__dirname, 'stocks.json');
@@ -348,21 +347,8 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
   const textLines = orderLinesText(lines || []);
   const htmlLines = orderLinesHtml(lines || []);
   const messageText = safeCustomer.message || 'Aucun message particulier.';
-  const relayPoint = safeCustomer.relayPoint;
-  const carrierLabel = safeCustomer.carrier === 'colissimo' ? 'Colissimo' : safeCustomer.carrier === 'mondial_relay' ? 'Mondial Relay' : '';
-  const addressLabel = includePickupAddress
-    ? 'Adresse de retrait donnée au client'
-    : relayPoint
-    ? 'Point Relais Mondial Relay'
-    : carrierLabel
-    ? `Livraison à domicile (${carrierLabel})`
-    : 'Adresse de livraison';
   const addressText = includePickupAddress
     ? PICKUP_ADDRESS
-    : relayPoint
-    ? [relayPoint.name, relayPoint.street, `${relayPoint.postalCode || ''} ${relayPoint.city || ''}`.trim()]
-        .filter(Boolean)
-        .join('\n')
     : [safeCustomer.adresse, `${safeCustomer.codepostal || ''} ${safeCustomer.ville || ''}`.trim()]
         .filter(Boolean)
         .join('\n');
@@ -375,7 +361,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     '',
     `Total : ${formatEuro(total)}`,
     `Paiement : ${paymentLabel}`,
-    `${addressLabel} :\n${addressText}`,
+    includePickupAddress ? `Adresse de retrait donnée au client : ${PICKUP_ADDRESS}` : `Adresse de livraison :\n${addressText}`,
     '',
     'Client :',
     name,
@@ -395,7 +381,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     '',
     `Total : ${formatEuro(total)}`,
     `Paiement : ${paymentLabel}`,
-    `${addressLabel} :\n${addressText}`,
+    includePickupAddress ? `Adresse de retrait :\n${PICKUP_ADDRESS}` : `Adresse de livraison :\n${addressText}`,
     '',
     includePickupAddress ? 'Vous serez recontacté si besoin pour convenir du moment de retrait.' : 'Votre commande a bien été réglée en ligne.',
     '',
@@ -409,7 +395,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     <ul>${htmlLines}</ul>
     <p><strong>Total :</strong> ${formatEuro(total)}</p>
     <p><strong>Paiement :</strong> ${escapeHtml(paymentLabel)}</p>
-    <p><strong>${escapeHtml(addressLabel)} :</strong><br>${escapeHtml(
+    <p><strong>${includePickupAddress ? 'Adresse de retrait donnée au client' : 'Adresse de livraison'} :</strong><br>${escapeHtml(
       addressText
     ).replace(/\n/g, '<br>')}</p>
     <h3>Client</h3>
@@ -425,7 +411,7 @@ async function sendOrderConfirmationEmails({ lines, total, customer, subjectPref
     <ul>${htmlLines}</ul>
     <p><strong>Total :</strong> ${formatEuro(total)}</p>
     <p><strong>Paiement :</strong> ${escapeHtml(paymentLabel)}</p>
-    <p><strong>${escapeHtml(includePickupAddress ? 'Adresse de retrait' : addressLabel)} :</strong><br>${escapeHtml(addressText).replace(
+    <p><strong>${includePickupAddress ? 'Adresse de retrait' : 'Adresse de livraison'} :</strong><br>${escapeHtml(addressText).replace(
       /\n/g,
       '<br>'
     )}</p>
@@ -507,20 +493,6 @@ async function getGoogleSheetsAccessToken() {
   return data.access_token;
 }
 
-function describeDelivery({ type, customer }) {
-  const safeCustomer = customer || {};
-  if (safeCustomer.relayPoint) {
-    const p = safeCustomer.relayPoint;
-    return `Point Relais: ${p.name} - ${p.street || ''}, ${p.postalCode || ''} ${p.city || ''}`.trim();
-  }
-  if (type === 'Retrait Ploërmel') return 'Retrait Ploërmel';
-  if (safeCustomer.adresse) {
-    const carrierLabel = safeCustomer.carrier === 'colissimo' ? 'Colissimo' : safeCustomer.carrier === 'mondial_relay' ? 'Mondial Relay' : '';
-    return `Domicile${carrierLabel ? ` (${carrierLabel})` : ''}: ${safeCustomer.adresse}, ${safeCustomer.codepostal || ''} ${safeCustomer.ville || ''}`.trim();
-  }
-  return '';
-}
-
 async function sendOrderToSheet({ type, lines, total, customer, paymentLabel }) {
   const sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) return;
@@ -540,7 +512,6 @@ async function sendOrderToSheet({ type, lines, total, customer, paymentLabel }) 
       productsText,
       formatEuro(total),
       paymentLabel,
-      describeDelivery({ type, customer }),
     ];
 
     const resp = await fetch(
@@ -598,47 +569,6 @@ async function getPaypalAccessToken() {
   }
   const data = await resp.json();
   return data.access_token;
-}
-
-async function fetchMondialRelayPoints(postcode) {
-  const publicKey = process.env.SENDCLOUD_PUBLIC_KEY;
-  const secretKey = process.env.SENDCLOUD_SECRET_KEY;
-  if (!publicKey || !secretKey) {
-    throw new Error('SENDCLOUD_PUBLIC_KEY ou SENDCLOUD_SECRET_KEY non défini');
-  }
-
-  const auth = Buffer.from(`${publicKey}:${secretKey}`).toString('base64');
-  const params = new URLSearchParams({
-    country_code: 'FR',
-    address_postal_code: postcode,
-    use_integration_carriers: 'true',
-    radius: '15000',
-    limit: '30',
-  });
-
-  const resp = await fetch(`https://panel.sendcloud.sc/api/v3/service-points?${params.toString()}`, {
-    headers: { Authorization: `Basic ${auth}` },
-  });
-  const data = await resp.json();
-  if (!resp.ok) {
-    throw new Error(`Sendcloud error: ${resp.status} ${JSON.stringify(data)}`);
-  }
-
-  const results = (data.data && data.data.results) || [];
-  return results
-    .filter((point) => {
-      const carrierLabel = `${(point.carrier && point.carrier.code) || ''} ${(point.carrier && point.carrier.name) || ''}`.toLowerCase();
-      return carrierLabel.includes('mondial');
-    })
-    .slice(0, 12)
-    .map((point) => ({
-      id: point.id,
-      name: point.name,
-      street: point.address ? `${point.address.street || ''} ${point.address.house_number || ''}`.trim() : '',
-      postalCode: point.address ? point.address.postal_code : '',
-      city: point.address ? point.address.city : '',
-      distance: point.distance,
-    }));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -828,26 +758,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathname === '/api/relay-points' && req.method === 'GET') {
-    const postcode = urlObj.searchParams.get('postcode') || '';
-    if (!/^\d{5}$/.test(postcode)) {
-      setHeaders(res, 400);
-      res.end(JSON.stringify({ error: 'Code postal invalide' }));
-      return;
-    }
-
-    try {
-      const points = await fetchMondialRelayPoints(postcode);
-      setHeaders(res, 200);
-      res.end(JSON.stringify({ points }));
-    } catch (error) {
-      console.error('Erreur recherche points relais:', error);
-      setHeaders(res, 500);
-      res.end(JSON.stringify({ error: 'Erreur recherche points relais', message: error.message }));
-    }
-    return;
-  }
-
   if (pathname === '/api/contact' && req.method === 'POST') {
     parseBody(req, async (parseErr, body) => {
       if (parseErr) {
@@ -922,40 +832,6 @@ const server = http.createServer(async (req, res) => {
         console.error('Newsletter email error:', error);
         setHeaders(res, 500);
         res.end(JSON.stringify({ error: 'Erreur envoi newsletter', message: error.message }));
-      }
-    });
-    return;
-  }
-
-  if (pathname === '/api/refer' && req.method === 'POST') {
-    parseBody(req, async (parseErr, body) => {
-      if (parseErr) {
-        setHeaders(res, 400);
-        res.end(JSON.stringify({ error: 'Corps JSON invalide' }));
-        return;
-      }
-
-      const email = String((body && body.email) || '').trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        setHeaders(res, 400);
-        res.end(JSON.stringify({ error: 'Email invalide' }));
-        return;
-      }
-
-      try {
-        await sendBrevoEmail({
-          to: [{ email, name: email }],
-          subject: 'On vous fait découvrir Ma Forêt 🐝',
-          textContent: `Bonjour,\n\nUn proche vous fait découvrir Ma Forêt, une petite exploitation apicole à Ploërmel : miel, cire, propolis et services autour des abeilles.\n\nDécouvrez le site : ${SITE_URL}\n\nÀ bientôt,\nMa Forêt`,
-          htmlContent: `<p>Bonjour,</p><p>Un proche vous fait découvrir <strong>Ma Forêt</strong>, une petite exploitation apicole à Ploërmel : miel, cire, propolis et services autour des abeilles.</p><p><a href="${SITE_URL}">Découvrir le site Ma Forêt</a></p><p>À bientôt,<br>Ma Forêt</p>`,
-        });
-
-        setHeaders(res, 200);
-        res.end(JSON.stringify({ ok: true }));
-      } catch (error) {
-        console.error('Referral email error:', error);
-        setHeaders(res, 500);
-        res.end(JSON.stringify({ error: 'Erreur envoi email', message: error.message }));
       }
     });
     return;
